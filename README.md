@@ -1,7 +1,7 @@
 ## Research Question
 Do PM2.5 exposure and median household income percentile predict asthma-related incidents across NYC zipcodes?
 
-## Methodology
+## Methodology (R studio)
 1) Download a shapefile of zip codes and filter by NYC zip codes.
 2) Download the PM2.5 raster data as the mean for 2023 and aggregate by ZIP code.
 3) Download the EMS Incident Dispatch data filtered by Final Call Type: Asthma, and Year 2023. Create a new column, incident_count, which counts the number of Asthma-related incidents by zipcode.  
