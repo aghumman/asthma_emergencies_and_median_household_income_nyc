@@ -1,0 +1,178 @@
+---
+title: "Final Project"
+author: "Areeba Ghumman"
+date: "`r Sys.Date()`"
+output: html_document
+---
+create a pm2.5 mean average table from the raster data
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+```{r}
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(terra)
+library(exactextractr)
+library(dplyr)
+census <- sf::st_read('/Users/areeba/Desktop/tl_2024_us_zcta520/tl_2024_us_zcta520.shp')
+
+nyc_zip_codes <- c(10001:10282,   10451:10475,   11201:11256, 11004:11005, 11101:11106, 11354:11375, 11377:11386, 11411:11436, 11691:11697,   10301:10314)
+
+nyc_zip <- census %>% filter(as.numeric(ZCTA5CE20) %in% nyc_zip_codes)
+nrow(nyc_zip)
+
+pm2.5 <- rast("/Users/areeba/Desktop/V6GL02.04.CNNPM25.NA.202301-202312.nc")
+pm2.5_by_zipcode <- nyc_zip %>% st_transform(crs(pm2.5)) %>% mutate(pm2.5_mean = round(exact_extract(pm2.5, ., "mean"), 2))%>% st_drop_geometry() %>% select(zip5 = ZCTA5CE20, pm2.5_mean)
+
+write.csv(pm2.5_by_zipcode, "/Users/areeba/Desktop/pm2.5_avg.csv", row.names = FALSE)
+```
+read the ems file and filter the data by 2023 and create a column incident count which groups the ems asthma related calls and counts them by zipcode
+```{r}
+ems <- read_csv("/Users/areeba/Desktop/EMS_Incident_Dispatch_Data_20260501.csv")
+ems_2023 <- ems %>% filter(startsWith(as.character(CAD_INCIDENT_ID), "23")) %>% group_by(ZIPCODE) %>% summarise(incident_count = n(), .groups = "drop")
+```
+read the census data by an API call and get certain categories
+
+```{r}
+library(tidycensus)
+census_api_key("04f69c8500e02b83fbd20a1d7f3df65e6a8c78e0", overwrite  = TRUE)
+
+census_2023 <- get_acs(geography = "zcta", variables=c(
+  total_population = "B01003_001",
+  med_income = "B19013_001",
+  poverty_rate = "S1701_C03_001",
+  white_pop = "B02001_002",
+  black_pop = "B02001_003",
+  asian_pop = "B02001_005"
+), year = 2023, output = "wide")
+
+names(census_2023)
+nyc_zip_codes <- c(10001:10282,   10451:10475,   11201:11256, 11004:11005, 11101:11106, 11354:11375, 11377:11386, 11411:11436, 11691:11697,   10301:10314)
+census_2023 <- census_2023 %>% mutate(zipcode = gsub("ZCTA5 ", "", NAME)) %>% filter(zipcode %in% as.character(nyc_zip_codes)) %>% select(-GEOID, -NAME)
+```
+join the ems, census and pm2.5 data by zipcode
+
+```{r}
+ems_2023 <- ems_2023 %>% mutate(ZIPCODE = as.character(ZIPCODE))
+ems_census <- census_2023 %>% left_join(ems_2023, by = c("zipcode" = "ZIPCODE"))
+ems_census_pm25 <- ems_census %>% left_join(pm2.5_by_zipcode, by = c("zipcode" = "zip5"))
+ems_census_pm25 <- ems_census_pm25 %>% mutate(med_income_pct = round(percent_rank(med_incomeE)*100, 1))
+
+```
+ggplot for PM2.5 mean for 2023
+```{r}
+nyc_map <- nyc_zip %>% mutate(ZCTA5CE20 = as.character(ZCTA5CE20)) %>% left_join(ems_census_pm25, by = c("ZCTA5CE20" = "zipcode"))
+ggplot(nyc_map) + geom_sf(aes(fill = pm2.5_mean), color = "white", size = 0.2) + scale_fill_gradient(low = "lightyellow", high = "darkred", name = "PM2.5 (µg/m³)")+ labs(title = "PM2.5 levels by zipcode (2023 mean)") + theme_void()
+```
+ggplot for PM2.5 mean for 2023
+```{r}
+ggplot(nyc_map) + geom_sf(aes(fill = incident_count), color = "white", size = 0.2) + scale_fill_gradient(low = "lightyellow", high = "darkred", name = "EMS Asthma related incidents")+ labs(title = "EMS Asthma related incidents by zipcode (2023)") + theme_void()
+```
+ggplot for median income percentile for 2023
+```{r}
+ggplot(nyc_map) + geom_sf(aes(fill = med_income_pct), color = "white", size = 0.2) + scale_fill_gradient(low = "lightyellow", high = "darkred", name = "Median income percentile")+ labs(title = "Median income percentile by zipcode (2023)") + theme_void()
+```
+pm2.5 and EMS incidents scatter plot
+```{r}
+ggplot(ems_census_pm25, aes(x=pm2.5_mean, y = incident_count)) +
+  geom_point(alpha = 0.6, color = "skyblue")+
+  geom_smooth(method = "lm", color = "dodgerblue")+
+  labs(title = "Average pm2.5 vs Asthma related EMS incidents", x = "Mean PM2.5 (µg/m³)", y = "EMS Asthma related incidents")+ theme_minimal()
+```
+median income and EMS incidents scatter plot
+```{r}
+ggplot(ems_census_pm25, aes(x=med_income_pct, y = incident_count)) +
+  geom_point(alpha = 0.6, color = "skyblue")+
+  geom_smooth(method = "lm", color = "dodgerblue")+
+  labs(title = "Median Income percentile vs Asthma related EMS incidents", x = "Median income percentile", y = "EMS Asthma related incidents")+ theme_minimal()
+```
+median income and pm2.5 scatter plot
+```{r}
+ggplot(ems_census_pm25, aes(x=med_income_pct, y = pm2.5_mean)) +
+  geom_point(alpha = 0.6, color = "skyblue")+
+  geom_smooth(method = "lm", color = "dodgerblue")+
+  labs(title = "Median Income percentile vs Mean PM2.5", x = "Median income percentile", y = "Mean PM2.5")+ theme_minimal()
+```
+
+create a web interactive map which shows the asthma related ems calls, pm2.5 and median income percentile
+```{r}
+library(leaflet)
+library(sf)
+
+nyc_map <- nyc_map %>% st_transform(crs = 4326)
+
+pal_pm25 <- colorNumeric(palette = "YlOrRd", domain = nyc_map$pm2.5_mean)
+pal_income <- colorNumeric(palette = "YlOrRd", domain = nyc_map$med_income_pct)
+pal_incidents <- colorNumeric(palette = "YlOrRd", domain = nyc_map$incident_count)
+
+leaflet(nyc_map) %>% addTiles() %>% addPolygons(group = "PM2.5",
+                                                fillColor = ~pal_pm25(pm2.5_mean),
+                                                fillOpacity = 0.7,
+                                                color = "pink", weight = 1, 
+                                                popup = ~paste0(
+                                                  "<b>ZIP Code:</b> ", ZCTA5CE20, "<br>",
+                                                  "<b>PM2.5 Mean:</b> ", pm2.5_mean, "<br>"
+                                                )
+  )%>%
+  addLegend(
+    pal = pal_pm25,
+    values = ~pm2.5_mean,
+    title = "PM2.5 Average",
+    position = "bottomright",
+    group = "PM2.5"
+  ) %>% 
+  
+  addPolygons(group = "Median Income",fillColor = ~pal_income(med_income_pct),
+                                                fillOpacity = 0.7,
+                                                color = "pink", weight = 1, 
+                                                popup = ~paste0(
+                                                  "<b>ZIP Code:</b> ", ZCTA5CE20, "<br>",
+                                                  "<b>Median Income Percentile:</b> ", med_income_pct, "<br>"
+                                                )
+  )%>%
+  addLegend(
+    pal = pal_income,
+    values = ~med_income_pct,
+    title = "Median Income Percentile",
+    position = "bottomright",
+    group = "Median Income"
+  ) %>% 
+  
+  addPolygons(group = "EMS Incidents",
+                                                fillColor = ~pal_incidents(incident_count),
+                                                fillOpacity = 0.7,
+                                                color = "pink", weight = 1, 
+                                                popup = ~paste0(
+                                                  "<b>ZIP Code:</b> ", ZCTA5CE20, "<br>",
+                                                  "<b>EMS Asthma Related Incidents:</b> ", incident_count, "<br>"
+                                                )
+  )%>%
+  addLegend(
+    pal = pal_incidents,
+    values = ~incident_count,
+    title = "EMS Asthma Related Incidents",
+    position = "bottomright",
+    group = "EMS Incidents"
+  ) %>% 
+
+  addLayersControl(overlayGroups  = c("PM2.5", "Median Income", "EMS Incidents"),
+                   options = layersControlOptions(collapsed  = FALSE)) %>% 
+  hideGroup(c("PM2.5", "Median Income", "EMS Incidents"))
+```
+create a regression model to check the relationship between my variables
+```{r}
+library(stargazer)
+reg_model <- lm(incident_count~med_income_pct + pm2.5_mean, data = ems_census_pm25)
+
+stargazer(reg_model,
+          type = "text",
+          title = "Linear Regression: EMS incident by PM2.5 and median income",
+          covariate.labels = c("Median Income Percentile", "PM2.5 Mean"),
+          dep.var.labels = "EMS Asthma Related Incidents",
+          ci = TRUE,
+          ci.level = 0.95,
+          single.row = TRUE)
+```
+
